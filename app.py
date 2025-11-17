@@ -14,6 +14,7 @@ from database import (
     listar_chats,
     salvar_arquivo,
     atualizar_titulo_chat,
+    deletar_chat,
 )
 from filename_utils import sanitize_filename, sanitize_storage_path
 from chat_titles import generate_chat_title
@@ -73,6 +74,10 @@ st.title("🤖 Chatbot com múltiplos chats")
 if "chat_id" not in st.session_state:
     st.session_state.chat_id = None
 
+if "pending_delete_chat_id" not in st.session_state:
+    st.session_state.pending_delete_chat_id = None
+    st.session_state.pending_delete_chat_title = ""
+
 # Sidebar de seleção e criação de chats
 with st.sidebar:
     st.header("💬 Chats")
@@ -86,9 +91,22 @@ with st.sidebar:
     for chat in chats:
         chat_id = chat.get("id")
         label = chat.get("title") or f"Chat {chat_id}"
-        if st.button(label, key=f"chat-{chat_id}"):
-            st.session_state.chat_id = chat_id
-            st.rerun()
+        select_col, delete_col = st.columns([0.7, 0.3], gap="small")
+        with select_col:
+            if st.button(label, key=f"chat-{chat_id}", use_container_width=True):
+                st.session_state.chat_id = chat_id
+                st.rerun()
+        with delete_col:
+            if st.button(
+                "🗑️",
+                key=f"delete-{chat_id}",
+                help="Excluir chat",
+                type="secondary",
+                use_container_width=True,
+            ):
+                st.session_state.pending_delete_chat_id = chat_id
+                st.session_state.pending_delete_chat_title = label
+                st.rerun()
 
     if st.button("➕ Novo chat"):
         titulo = "Novo chat"
@@ -101,6 +119,28 @@ with st.sidebar:
         if novo_chat_id is not None:
             st.session_state.chat_id = novo_chat_id
             st.rerun()
+
+    pending_delete = st.session_state.pending_delete_chat_id
+    if pending_delete:
+        st.warning(f"Deseja apagar '{st.session_state.pending_delete_chat_title}'? Esta ação é permanente.")
+        confirm_col, cancel_col = st.columns(2)
+        with confirm_col:
+            if st.button("Confirmar exclusão", key="confirm-delete"):
+                try:
+                    deletar_chat(pending_delete)
+                except Exception as exc:
+                    st.error(f"Não foi possível remover o chat: {exc}")
+                else:
+                    if st.session_state.chat_id == pending_delete:
+                        st.session_state.chat_id = None
+                    st.session_state.pending_delete_chat_id = None
+                    st.session_state.pending_delete_chat_title = ""
+                    st.rerun()
+        with cancel_col:
+            if st.button("Cancelar", key="cancel-delete"):
+                st.session_state.pending_delete_chat_id = None
+                st.session_state.pending_delete_chat_title = ""
+                st.rerun()
 
 # Garante que um chat foi escolhido
 if not st.session_state.chat_id:

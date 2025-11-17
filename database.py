@@ -83,6 +83,33 @@ def listar_arquivos():
     return supabase.storage.from_("uploads").list()
 
 
+def deletar_chat(chat_id: int):
+    """Remove chat, mensagens e arquivos associados no Supabase."""
+    if not chat_id:
+        return
+
+    files_response = (
+        supabase
+        .table("files")
+        .select("id,path")
+        .like("path", f"{chat_id}/%")
+        .execute()
+    )
+
+    files_data = files_response.data or []
+    file_ids = [item.get("id") for item in files_data if item.get("id")]
+    file_paths = [item.get("path") for item in files_data if item.get("path")]
+
+    if file_paths:
+        supabase.storage.from_("uploads").remove(file_paths)
+
+    if file_ids:
+        supabase.table("files").delete().in_("id", file_ids).execute()
+
+    supabase.table("messages").delete().eq("chat_id", chat_id).execute()
+    supabase.table("chats").delete().eq("id", chat_id).execute()
+
+
 def atualizar_titulo_chat(chat_id: int, novo_titulo: str):
     """Atualiza o título de um chat específico."""
     if not novo_titulo:
@@ -97,5 +124,6 @@ __all__ = [
     "buscar_historico",
     "salvar_arquivo",
     "listar_arquivos",
+    "deletar_chat",
     "atualizar_titulo_chat",
 ]
