@@ -4,6 +4,7 @@ import datetime
 from typing import Any, Dict, List, Optional
 
 from supabase_client import supabase
+from filename_utils import sanitize_filename, sanitize_storage_path
 
 
 def listar_chats() -> List[Dict[str, Any]]:
@@ -57,8 +58,11 @@ def buscar_historico(chat_id: int) -> List[Dict[str, Any]]:
 
 def salvar_arquivo(nome: str, caminho: str, dados_bytes: bytes):
     """Faz upload para o Storage e armazena metadados na tabela files."""
+    safe_name = sanitize_filename(nome)
+    safe_path = sanitize_storage_path(caminho or safe_name)
+
     result = supabase.storage.from_("uploads").upload(
-        caminho,
+        safe_path,
         dados_bytes,
         {"content-type": "application/octet-stream"}
     )
@@ -67,8 +71,8 @@ def salvar_arquivo(nome: str, caminho: str, dados_bytes: bytes):
         raise RuntimeError(f"Erro ao enviar arquivo: {result['error']}")
 
     payload = {
-        "file_name": nome,
-        "path": caminho,
+        "file_name": safe_name,
+        "path": safe_path,
         "uploaded_at": datetime.datetime.utcnow().isoformat(),
     }
     return supabase.table("files").insert(payload).execute()

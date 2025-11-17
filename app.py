@@ -14,6 +14,7 @@ from database import (
     listar_chats,
     salvar_arquivo,
 )
+from filename_utils import sanitize_filename, sanitize_storage_path
 
 # Carrega variáveis do .env
 load_dotenv()
@@ -117,17 +118,18 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     caminhos = []
     for file in uploaded_files:
+        safe_name = sanitize_filename(file.name)
         temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, file.name)
+        temp_path = os.path.join(temp_dir, safe_name)
         file_bytes = file.getvalue()
         with open(temp_path, "wb") as f:
             f.write(file_bytes)
 
-        armazenamento_path = f"{chat_id}/{file.name}"
+        armazenamento_path = sanitize_storage_path(f"{chat_id}/{safe_name}")
         try:
-            salvar_arquivo(file.name, armazenamento_path, file_bytes)
+            salvar_arquivo(safe_name, armazenamento_path, file_bytes)
         except Exception as exc:
-            st.warning(f"Não foi possível salvar {file.name} no Supabase: {exc}")
+            st.warning(f"Não foi possível salvar {safe_name} no Supabase: {exc}")
 
         caminhos.append(temp_path)
 
