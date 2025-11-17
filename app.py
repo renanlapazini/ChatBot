@@ -1,6 +1,7 @@
 import datetime
 import os
 import tempfile
+import uuid
 
 import streamlit as st
 from groq import Groq
@@ -68,6 +69,38 @@ def gerar_resposta(mensagem: str) -> str:
 
     return "Erro: nenhum modelo conseguiu responder."
 
+
+def process_pending_uploads(chat_id: int) -> list[str]:
+    """Envia arquivos pendentes ao Supabase e retorna caminhos temporários."""
+    pending_map = st.session_state.pending_uploads.get(chat_id)
+    if not pending_map:
+        return []
+
+    processed_paths: list[str] = []
+    for file_id, metadata in list(pending_map.items()):
+        original_name = metadata["original_name"]
+        temp_path = metadata["temp_path"]
+        safe_name = sanitize_filename(original_name)
+        armazenamento_path = sanitize_storage_path(f"{chat_id}/{safe_name}")
+
+        try:
+            with open(temp_path, "rb") as temp_file:
+                file_bytes = temp_file.read()
+            salvar_arquivo(safe_name, armazenamento_path, file_bytes)
+        except Exception as exc:
+            st.warning(f"Não foi possível enviar {original_name}: {exc}")
+            continue
+
+        processed_paths.append(temp_path)
+        del pending_map[file_id]
+
+    if pending_map:
+        st.session_state.pending_uploads[chat_id] = pending_map
+    else:
+        st.session_state.pending_uploads.pop(chat_id, None)
+
+    return processed_paths
+
 st.set_page_config(page_title="Chatbot", page_icon="🤖")
 st.title("🤖 Chatbot com múltiplos chats")
 
@@ -77,6 +110,12 @@ if "chat_id" not in st.session_state:
 if "pending_delete_chat_id" not in st.session_state:
     st.session_state.pending_delete_chat_id = None
     st.session_state.pending_delete_chat_title = ""
+
+if "pending_uploads" not in st.session_state:
+    st.session_state.pending_uploads = {}
+
+if "upload_tokens" not in st.session_state:
+    st.session_state.upload_tokens = {}
 
 # Sidebar de seleção e criação de chats
 with st.sidebar:
@@ -133,6 +172,8 @@ with st.sidebar:
                 else:
                     if st.session_state.chat_id == pending_delete:
                         st.session_state.chat_id = None
+                    st.session_state.pending_uploads.pop(pending_delete, None)
+                    st.session_state.upload_tokens.pop(pending_delete, None)
                     st.session_state.pending_delete_chat_id = None
                     st.session_state.pending_delete_chat_title = ""
                     st.rerun()
@@ -150,33 +191,43 @@ if not st.session_state.chat_id:
 chat_id = st.session_state.chat_id
 
 st.subheader("Arquivos do chat")
+upload_token = st.session_state.upload_tokens.get(chat_id, 0)
 uploaded_files = st.file_uploader(
     "Envie seus arquivos (PDF, TXT, DOCX)",
     type=["pdf", "txt", "docx"],
     accept_multiple_files=True,
-    key=f"uploader-{chat_id}"
+    key=f"uploader-{chat_id}-{upload_token}"
 )
 
+pending_map = st.session_state.pending_uploads.setdefault(chat_id, {})
+
 if uploaded_files:
-    caminhos = []
+    novos_arquivos = 0
     for file in uploaded_files:
-        safe_name = sanitize_filename(file.name)
-        temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, safe_name)
         file_bytes = file.getvalue()
-        with open(temp_path, "wb") as f:
-            f.write(file_bytes)
+        file_id = f"{file.name}-{len(file_bytes)}"
+        if file_id in pending_map:
+            continue
 
-        armazenamento_path = sanitize_storage_path(f"{chat_id}/{safe_name}")
-        try:
-            salvar_arquivo(safe_name, armazenamento_path, file_bytes)
-        except Exception as exc:
-            st.warning(f"Não foi possível salvar {safe_name} no Supabase: {exc}")
+        temp_dir = tempfile.gettempdir()
+        safe_name = sanitize_filename(file.name)
+        unique_name = f"chatbot_{chat_id}_{uuid.uuid4().hex}_{safe_name}"
+        temp_path = os.path.join(temp_dir, unique_name)
+        with open(temp_path, "wb") as temp_file:
+            temp_file.write(file_bytes)
 
-        caminhos.append(temp_path)
+        pending_map[file_id] = {
+            "original_name": file.name,
+            "temp_path": temp_path,
+        }
+        novos_arquivos += 1
 
-    carregar_arquivos(caminhos)
-    st.success("Arquivos carregados e indexados com sucesso!")
+    if novos_arquivos:
+        st.info("Arquivos prontos. Eles serão enviados e indexados junto com sua próxima mensagem.")
+
+if pending_map:
+    fila = ", ".join(metadata["original_name"] for metadata in pending_map.values())
+    st.caption(f"Na fila: {fila}")
 
 st.divider()
 
@@ -199,6 +250,22 @@ for msg in historico:
 user_msg = st.chat_input("Digite sua mensagem...")
 
 if user_msg:
+    staged_paths = process_pending_uploads(chat_id)
+    if staged_paths:
+        try:
+            carregar_arquivos(staged_paths)
+        except Exception as exc:
+            st.error(f"Não foi possível indexar os arquivos: {exc}")
+        else:
+            st.success("Arquivos enviados e indexados junto com sua mensagem.")
+            st.session_state.upload_tokens[chat_id] = st.session_state.upload_tokens.get(chat_id, 0) + 1
+        finally:
+            for path in staged_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
     primeira_mensagem = not historico
     try:
         salvar_mensagem(chat_id, "user", user_msg)
