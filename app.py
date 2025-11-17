@@ -13,8 +13,10 @@ from database import (
     buscar_historico,
     listar_chats,
     salvar_arquivo,
+    atualizar_titulo_chat,
 )
 from filename_utils import sanitize_filename, sanitize_storage_path
+from chat_titles import generate_chat_title
 
 # Carrega variáveis do .env
 load_dotenv()
@@ -89,7 +91,7 @@ with st.sidebar:
             st.rerun()
 
     if st.button("➕ Novo chat"):
-        titulo = f"Chat {datetime.datetime.now().strftime('%H:%M:%S')}"
+        titulo = "Novo chat"
         try:
             novo_chat_id = criar_chat(titulo)
         except Exception as exc:
@@ -157,10 +159,18 @@ for msg in historico:
 user_msg = st.chat_input("Digite sua mensagem...")
 
 if user_msg:
+    primeira_mensagem = not historico
     try:
         salvar_mensagem(chat_id, "user", user_msg)
     except Exception as exc:
         st.warning(f"Não foi possível salvar a mensagem do usuário: {exc}")
+
+    if primeira_mensagem:
+        novo_titulo = generate_chat_title(user_msg)
+        try:
+            atualizar_titulo_chat(chat_id, novo_titulo)
+        except Exception as exc:
+            st.warning(f"Não foi possível atualizar o título do chat: {exc}")
 
     try:
         resposta = gerar_resposta(user_msg)

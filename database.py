@@ -83,6 +83,13 @@ def listar_arquivos():
     return supabase.storage.from_("uploads").list()
 
 
+def atualizar_titulo_chat(chat_id: int, novo_titulo: str):
+    """Atualiza o título de um chat específico."""
+    if not novo_titulo:
+        return
+    supabase.table("chats").update({"title": novo_titulo}).eq("id", chat_id).execute()
+
+
 __all__ = [
     "listar_chats",
     "criar_chat",
@@ -90,4 +97,5 @@ __all__ = [
     "buscar_historico",
     "salvar_arquivo",
     "listar_arquivos",
+    "atualizar_titulo_chat",
 ]
