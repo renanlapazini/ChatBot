@@ -21,10 +21,7 @@ from filename_utils import sanitize_filename, sanitize_storage_path
 from chat_titles import generate_chat_title
 from auth import sign_up, sign_in, sign_out, get_current_user, set_session
 
-# Carrega variáveis do .env
-load_dotenv()
-
-api_key = os.getenv("GROQ_API_KEY")
+api_key = os.environ["GROQ_API_KEY"]
 if not api_key:
     raise ValueError("Erro: GROQ_API_KEY não encontrada no arquivo .env")
 
