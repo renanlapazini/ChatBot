@@ -7,7 +7,7 @@ import streamlit as st
 from groq import Groq
 from dotenv import load_dotenv
 
-from rag import carregar_arquivos, buscar_contexto
+from rag import carregar_arquivos, buscar_contexto, limpar_chat_contexto
 from database import (
     criar_chat,
     salvar_mensagem,
@@ -31,9 +31,9 @@ if not api_key:
 client = Groq(api_key=api_key)
 
 
-def gerar_resposta(mensagem: str) -> str:
+def gerar_resposta(chat_id: int, mensagem: str) -> str:
     """Gera resposta usando o contexto recuperado via RAG."""
-    contexto = buscar_contexto(mensagem, k=5)
+    contexto = buscar_contexto(mensagem, chat_id, k=5)
 
     if not contexto:
         return "Não há dados suficientes nos arquivos fornecidos para responder isso."
@@ -86,7 +86,7 @@ def process_pending_uploads(chat_id: int) -> list[str]:
         try:
             with open(temp_path, "rb") as temp_file:
                 file_bytes = temp_file.read()
-            salvar_arquivo(safe_name, armazenamento_path, file_bytes)
+            salvar_arquivo(chat_id, safe_name, armazenamento_path, file_bytes)
         except Exception as exc:
             st.warning(f"Não foi possível enviar {original_name}: {exc}")
             continue
@@ -174,6 +174,7 @@ with st.sidebar:
                         st.session_state.chat_id = None
                     st.session_state.pending_uploads.pop(pending_delete, None)
                     st.session_state.upload_tokens.pop(pending_delete, None)
+                    limpar_chat_contexto(pending_delete)
                     st.session_state.pending_delete_chat_id = None
                     st.session_state.pending_delete_chat_title = ""
                     st.rerun()
@@ -253,7 +254,7 @@ if user_msg:
     staged_paths = process_pending_uploads(chat_id)
     if staged_paths:
         try:
-            carregar_arquivos(staged_paths)
+            carregar_arquivos(staged_paths, chat_id)
         except Exception as exc:
             st.error(f"Não foi possível indexar os arquivos: {exc}")
         else:
@@ -280,7 +281,7 @@ if user_msg:
             st.warning(f"Não foi possível atualizar o título do chat: {exc}")
 
     try:
-        resposta = gerar_resposta(user_msg)
+        resposta = gerar_resposta(chat_id, user_msg)
     except Exception as exc:
         st.error(f"Erro ao gerar resposta: {exc}")
         resposta = "Não foi possível gerar uma resposta no momento."

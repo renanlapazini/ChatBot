@@ -56,7 +56,7 @@ def buscar_historico(chat_id: int) -> List[Dict[str, Any]]:
     return response.data or []
 
 
-def salvar_arquivo(nome: str, caminho: str, dados_bytes: bytes):
+def salvar_arquivo(chat_id: int, nome: str, caminho: str, dados_bytes: bytes):
     """Faz upload para o Storage e armazena metadados na tabela files."""
     safe_name = sanitize_filename(nome)
     safe_path = sanitize_storage_path(caminho or safe_name)
@@ -71,6 +71,7 @@ def salvar_arquivo(nome: str, caminho: str, dados_bytes: bytes):
         raise RuntimeError(f"Erro ao enviar arquivo: {result['error']}")
 
     payload = {
+        "chat_id": chat_id,
         "file_name": safe_name,
         "path": safe_path,
         "uploaded_at": datetime.datetime.utcnow().isoformat(),
@@ -78,9 +79,17 @@ def salvar_arquivo(nome: str, caminho: str, dados_bytes: bytes):
     return supabase.table("files").insert(payload).execute()
 
 
-def listar_arquivos():
-    """Lista os arquivos do bucket uploads."""
-    return supabase.storage.from_("uploads").list()
+def listar_arquivos(chat_id: int) -> List[Dict[str, Any]]:
+    """Retorna metadados de arquivos associados a um chat específico."""
+    response = (
+        supabase
+        .table("files")
+        .select("id,file_name,path,uploaded_at")
+        .eq("chat_id", chat_id)
+        .order("uploaded_at", desc=True)
+        .execute()
+    )
+    return response.data or []
 
 
 def deletar_chat(chat_id: int):
@@ -92,7 +101,7 @@ def deletar_chat(chat_id: int):
         supabase
         .table("files")
         .select("id,path")
-        .like("path", f"{chat_id}/%")
+        .eq("chat_id", chat_id)
         .execute()
     )
 
