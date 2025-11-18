@@ -7,22 +7,24 @@ from supabase_client import supabase
 from filename_utils import sanitize_filename, sanitize_storage_path
 
 
-def listar_chats() -> List[Dict[str, Any]]:
-    """Retorna todos os chats ordenados do mais recente para o mais antigo."""
+def listar_chats(user_id: str) -> List[Dict[str, Any]]:
+    """Retorna todos os chats do usuário ordenados do mais recente para o mais antigo."""
     response = (
         supabase
         .table("chats")
         .select("id,title,created_at")
+        .eq("user_id", user_id)
         .order("created_at", desc=True)
         .execute()
     )
     return response.data or []
 
 
-def criar_chat(title: str) -> Optional[int]:
-    """Cria um chat e retorna o ID criado."""
+def criar_chat(title: str, user_id: str) -> Optional[int]:
+    """Cria um chat vinculado ao usuário e retorna o ID criado."""
     payload = {
         "title": title,
+        "user_id": user_id,
         "created_at": datetime.datetime.utcnow().isoformat(),
     }
     response = supabase.table("chats").insert(payload).execute()

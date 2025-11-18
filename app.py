@@ -19,6 +19,7 @@ from database import (
 )
 from filename_utils import sanitize_filename, sanitize_storage_path
 from chat_titles import generate_chat_title
+from auth import sign_up, sign_in, sign_out, get_current_user, set_session
 
 # Carrega variáveis do .env
 load_dotenv()
@@ -70,8 +71,9 @@ def gerar_resposta(chat_id: int, mensagem: str) -> str:
     return "Erro: nenhum modelo conseguiu responder."
 
 
-def process_pending_uploads(chat_id: int) -> list[str]:
+def process_pending_uploads(chat_id: int, user_id: str) -> list[str]:
     """Envia arquivos pendentes ao Supabase e retorna caminhos temporários."""
+    ensure_supabase_session()
     pending_map = st.session_state.pending_uploads.get(chat_id)
     if not pending_map:
         return []
@@ -101,6 +103,56 @@ def process_pending_uploads(chat_id: int) -> list[str]:
 
     return processed_paths
 
+def clear_auth_state():
+    st.session_state.auth_user = None
+    st.session_state.auth_token = None
+    st.session_state.auth_refresh_token = None
+    st.session_state.chat_id = None
+    st.session_state.pending_delete_chat_id = None
+    st.session_state.pending_delete_chat_title = ""
+    st.session_state.pending_uploads = {}
+    st.session_state.upload_tokens = {}
+
+
+def bootstrap_user_session():
+    token = st.session_state.auth_token
+    refresh = st.session_state.auth_refresh_token
+    if token and refresh:
+        try:
+            set_session(token, refresh)
+        except Exception:
+            clear_auth_state()
+            return
+    if not token or st.session_state.auth_user is not None:
+        return
+    try:
+        user = get_current_user(token)
+    except Exception:
+        clear_auth_state()
+        return
+    if user:
+        st.session_state.auth_user = user
+    else:
+        clear_auth_state()
+
+
+def ensure_supabase_session() -> bool:
+    """Força o cliente Supabase a usar os tokens do usuário logado."""
+    token = st.session_state.get("auth_token")
+    refresh = st.session_state.get("auth_refresh_token")
+    if not token or not refresh:
+        st.warning("Sessão expirada. Faça login novamente.")
+        clear_auth_state()
+        st.stop()
+    try:
+        set_session(token, refresh)
+    except Exception as exc:
+        st.warning(f"Não foi possível renovar a sessão: {exc}")
+        clear_auth_state()
+        st.stop()
+    return True
+
+
 st.set_page_config(page_title="Chatbot", page_icon="🤖")
 st.title("🤖 Chatbot com múltiplos chats")
 
@@ -117,72 +169,167 @@ if "pending_uploads" not in st.session_state:
 if "upload_tokens" not in st.session_state:
     st.session_state.upload_tokens = {}
 
-# Sidebar de seleção e criação de chats
+if "auth_user" not in st.session_state:
+    st.session_state.auth_user = None
+
+if "auth_token" not in st.session_state:
+    st.session_state.auth_token = None
+
+if "auth_refresh_token" not in st.session_state:
+    st.session_state.auth_refresh_token = None
+
+bootstrap_user_session()
+
+# Sidebar de autenticação e chats
 with st.sidebar:
-    st.header("💬 Chats")
+    st.header("Conta")
+    current_user = st.session_state.auth_user
 
-    try:
-        chats = listar_chats()
-    except Exception as exc:
-        st.error(f"Não foi possível listar os chats: {exc}")
-        chats = []
-
-    for chat in chats:
-        chat_id = chat.get("id")
-        label = chat.get("title") or f"Chat {chat_id}"
-        select_col, delete_col = st.columns([0.7, 0.3], gap="small")
-        with select_col:
-            if st.button(label, key=f"chat-{chat_id}", use_container_width=True):
-                st.session_state.chat_id = chat_id
-                st.rerun()
-        with delete_col:
-            if st.button(
-                "🗑️",
-                key=f"delete-{chat_id}",
-                help="Excluir chat",
-                type="secondary",
-                use_container_width=True,
-            ):
-                st.session_state.pending_delete_chat_id = chat_id
-                st.session_state.pending_delete_chat_title = label
-                st.rerun()
-
-    if st.button("➕ Novo chat"):
-        titulo = "Novo chat"
-        try:
-            novo_chat_id = criar_chat(titulo)
-        except Exception as exc:
-            st.error(f"Não foi possível criar o chat: {exc}")
-            novo_chat_id = None
-
-        if novo_chat_id is not None:
-            st.session_state.chat_id = novo_chat_id
+    if current_user:
+        st.success(f"Logado como {current_user.get('email', 'usuário')}" )
+        if st.button("Sair"):
+            try:
+                sign_out()
+            except Exception as exc:
+                st.warning(f"Erro ao sair: {exc}")
+            clear_auth_state()
             st.rerun()
+    else:
+        login_tab, signup_tab = st.tabs(["Entrar", "Cadastrar"])
+        with login_tab:
+            with st.form("login-form"):
+                login_email = st.text_input("Email", key="login-email")
+                login_password = st.text_input("Senha", type="password", key="login-password")
+                login_submit = st.form_submit_button("Entrar")
+                if login_submit:
+                    if not login_email or not login_password:
+                        st.warning("Informe email e senha.")
+                    else:
+                        try:
+                            auth_result = sign_in(login_email, login_password)
+                        except Exception as exc:
+                            st.error(f"Erro ao entrar: {exc}")
+                        else:
+                            user = auth_result.get("user")
+                            token = auth_result.get("access_token")
+                            if not user or not token:
+                                st.error("Falha ao recuperar sessão do usuário.")
+                            else:
+                                st.session_state.auth_user = user
+                                st.session_state.auth_token = token
+                                st.session_state.auth_refresh_token = auth_result.get("refresh_token")
+                                try:
+                                    set_session(token, st.session_state.auth_refresh_token)
+                                except Exception as exc:
+                                    st.error(f"Não foi possível estabelecer sessão: {exc}")
+                                    clear_auth_state()
+                                    st.stop()
+                                st.session_state.chat_id = None
+                                st.session_state.pending_delete_chat_id = None
+                                st.session_state.pending_delete_chat_title = ""
+                                st.session_state.pending_uploads = {}
+                                st.session_state.upload_tokens = {}
+                                st.success("Login realizado!")
+                                st.rerun()
+        with signup_tab:
+            with st.form("signup-form"):
+                signup_email = st.text_input("Email", key="signup-email")
+                signup_password = st.text_input("Senha", type="password", key="signup-password")
+                signup_submit = st.form_submit_button("Cadastrar")
+                if signup_submit:
+                    if not signup_email or not signup_password:
+                        st.warning("Informe email e senha para cadastro.")
+                    else:
+                        try:
+                            user = sign_up(signup_email, signup_password)
+                        except Exception as exc:
+                            st.error(f"Erro ao cadastrar: {exc}")
+                        else:
+                            if user:
+                                st.success("Cadastro realizado! Verifique seu email para confirmar a conta.")
+                            else:
+                                st.info("Cadastro enviado. Verifique seu email para confirmar.")
 
-    pending_delete = st.session_state.pending_delete_chat_id
-    if pending_delete:
-        st.warning(f"Deseja apagar '{st.session_state.pending_delete_chat_title}'? Esta ação é permanente.")
-        confirm_col, cancel_col = st.columns(2)
-        with confirm_col:
-            if st.button("Confirmar exclusão", key="confirm-delete"):
-                try:
-                    deletar_chat(pending_delete)
-                except Exception as exc:
-                    st.error(f"Não foi possível remover o chat: {exc}")
-                else:
-                    if st.session_state.chat_id == pending_delete:
-                        st.session_state.chat_id = None
-                    st.session_state.pending_uploads.pop(pending_delete, None)
-                    st.session_state.upload_tokens.pop(pending_delete, None)
-                    limpar_chat_contexto(pending_delete)
+    if current_user:
+        st.divider()
+        st.header("💬 Chats")
+
+        user_id = current_user.get("id")
+        ensure_supabase_session()
+        try:
+            chats = listar_chats(user_id)
+        except Exception as exc:
+            st.error(f"Não foi possível listar os chats: {exc}")
+            chats = []
+
+        chat_ids = {chat.get("id") for chat in chats if chat.get("id") is not None}
+        if st.session_state.chat_id and st.session_state.chat_id not in chat_ids:
+            st.session_state.chat_id = None
+
+        for chat in chats:
+            chat_id = chat.get("id")
+            label = chat.get("title") or f"Chat {chat_id}"
+            select_col, delete_col = st.columns([0.7, 0.3], gap="small")
+            with select_col:
+                if st.button(label, key=f"chat-{chat_id}", use_container_width=True):
+                    st.session_state.chat_id = chat_id
+                    st.rerun()
+            with delete_col:
+                if st.button(
+                    "🗑️",
+                    key=f"delete-{chat_id}",
+                    help="Excluir chat",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_delete_chat_id = chat_id
+                    st.session_state.pending_delete_chat_title = label
+                    st.rerun()
+
+        if st.button("➕ Novo chat"):
+            titulo = "Novo chat"
+            ensure_supabase_session()
+            try:
+                novo_chat_id = criar_chat(titulo, user_id)
+            except Exception as exc:
+                st.error(f"Não foi possível criar o chat: {exc}")
+                novo_chat_id = None
+
+            if novo_chat_id is not None:
+                st.session_state.chat_id = novo_chat_id
+                st.rerun()
+
+        pending_delete = st.session_state.pending_delete_chat_id
+        if pending_delete:
+            st.warning(f"Deseja apagar '{st.session_state.pending_delete_chat_title}'? Esta ação é permanente.")
+            confirm_col, cancel_col = st.columns(2)
+            with confirm_col:
+                if st.button("Confirmar exclusão", key="confirm-delete"):
+                    ensure_supabase_session()
+                    try:
+                        deletar_chat(pending_delete)
+                    except Exception as exc:
+                        st.error(f"Não foi possível remover o chat: {exc}")
+                    else:
+                        if st.session_state.chat_id == pending_delete:
+                            st.session_state.chat_id = None
+                        st.session_state.pending_uploads.pop(pending_delete, None)
+                        st.session_state.upload_tokens.pop(pending_delete, None)
+                        limpar_chat_contexto(pending_delete)
+                        st.session_state.pending_delete_chat_id = None
+                        st.session_state.pending_delete_chat_title = ""
+                        st.rerun()
+            with cancel_col:
+                if st.button("Cancelar", key="cancel-delete"):
                     st.session_state.pending_delete_chat_id = None
                     st.session_state.pending_delete_chat_title = ""
                     st.rerun()
-        with cancel_col:
-            if st.button("Cancelar", key="cancel-delete"):
-                st.session_state.pending_delete_chat_id = None
-                st.session_state.pending_delete_chat_title = ""
-                st.rerun()
+
+    current_user = st.session_state.auth_user
+    if not current_user:
+        st.stop()
+
+    user_id = current_user.get("id")
 
 # Garante que um chat foi escolhido
 if not st.session_state.chat_id:
@@ -233,6 +380,7 @@ if pending_map:
 st.divider()
 
 # Histórico do chat atual
+ensure_supabase_session()
 try:
     historico = buscar_historico(chat_id)
 except Exception as exc:
@@ -251,7 +399,7 @@ for msg in historico:
 user_msg = st.chat_input("Digite sua mensagem...")
 
 if user_msg:
-    staged_paths = process_pending_uploads(chat_id)
+    staged_paths = process_pending_uploads(chat_id, user_id)
     if staged_paths:
         try:
             carregar_arquivos(staged_paths, chat_id)
@@ -269,6 +417,7 @@ if user_msg:
 
     primeira_mensagem = not historico
     try:
+        ensure_supabase_session()
         salvar_mensagem(chat_id, "user", user_msg)
     except Exception as exc:
         st.warning(f"Não foi possível salvar a mensagem do usuário: {exc}")
@@ -276,6 +425,7 @@ if user_msg:
     if primeira_mensagem:
         novo_titulo = generate_chat_title(user_msg)
         try:
+            ensure_supabase_session()
             atualizar_titulo_chat(chat_id, novo_titulo)
         except Exception as exc:
             st.warning(f"Não foi possível atualizar o título do chat: {exc}")
@@ -287,6 +437,7 @@ if user_msg:
         resposta = "Não foi possível gerar uma resposta no momento."
 
     try:
+        ensure_supabase_session()
         salvar_mensagem(chat_id, "assistant", resposta)
     except Exception as exc:
         st.warning(f"Não foi possível salvar a resposta do bot: {exc}")
